@@ -30,6 +30,7 @@ const active: CreateShiftInput = { ...completed, startTime: '2026-10-13T18:00:00
 describe('mockApi', () => {
   beforeEach(async () => {
     jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-10-13T08:00:00.000Z'));
     setSimulateErrors(false);
     await resetMockData();
   });
@@ -51,6 +52,38 @@ describe('mockApi', () => {
     await expect(settle(mockApi.createShift(active))).rejects.toMatchObject({ status: 409 });
   });
 
+  it('rejects overlapping shifts on create and edit, but not an edit of the same shift', async () => {
+    const created = await settle(mockApi.createShift(completed));
+    await expect(
+      settle(mockApi.createShift({ ...completed, startTime: '2026-10-13T12:00:00.000Z', endTime: '2026-10-13T20:00:00.000Z' })),
+    ).rejects.toMatchObject({ status: 409, message: 'This shift overlaps with an existing shift.' });
+
+    const evening = await settle(
+      mockApi.createShift({ ...completed, startTime: '2026-10-13T17:00:00.000Z', endTime: '2026-10-13T21:00:00.000Z' }),
+    );
+    await expect(settle(mockApi.updateShift(created.id, { startTime: '2026-10-13T08:00:00.000Z' }))).resolves.toBeDefined();
+    await expect(settle(mockApi.updateShift(evening.id, { startTime: '2026-10-13T16:00:00.000Z' }))).rejects.toMatchObject({
+      status: 409,
+    });
+  });
+
+  it('rejects starting a shift while another shift covers the current time', async () => {
+    jest.setSystemTime(new Date('2026-10-13T12:00:00.000Z'));
+    await settle(mockApi.createShift(completed));
+    await expect(settle(mockApi.createShift({ ...active, startTime: new Date().toISOString() }))).rejects.toMatchObject({
+      status: 409,
+    });
+  });
+
+  it('always allows clocking out of the active shift', async () => {
+    jest.setSystemTime(new Date('2026-10-13T08:00:00.000Z'));
+    const running = await settle(mockApi.createShift({ ...active, startTime: '2026-10-13T08:00:00.000Z' }));
+    await settle(mockApi.createShift({ ...completed, startTime: '2026-10-13T09:00:00.000Z', endTime: '2026-10-13T10:00:00.000Z' }));
+    await expect(settle(mockApi.updateShift(running.id, { endTime: '2026-10-13T11:00:00.000Z' }))).resolves.toMatchObject({
+      endTime: '2026-10-13T11:00:00.000Z',
+    });
+  });
+
   it('rejects an end time before the start time', async () => {
     await expect(settle(mockApi.createShift({ ...completed, endTime: '2026-10-13T08:00:00.000Z' }))).rejects.toMatchObject({
       status: 400,
@@ -58,12 +91,14 @@ describe('mockApi', () => {
   });
 
   it('returns the week’s shifts plus the active shift from any week', async () => {
+    jest.setSystemTime(new Date('2026-10-12T02:00:00.000Z'));
     await settle(mockApi.createShift(completed));
     await settle(mockApi.createShift({ ...completed, date: '2026-10-05', startTime: '2026-10-05T09:00:00.000Z', endTime: '2026-10-05T17:00:00.000Z' }));
-    await settle(mockApi.createShift({ ...active, date: '2026-10-04', startTime: '2026-10-04T22:00:00.000Z' }));
+    // Started Sunday night of the previous week and still running.
+    await settle(mockApi.createShift({ ...active, date: '2026-10-11', startTime: '2026-10-11T22:00:00.000Z' }));
 
     const shifts = await settle(mockApi.getShifts('2026-10-12'));
-    expect(shifts.map((shift) => shift.date)).toEqual(['2026-10-04', '2026-10-13']);
+    expect(shifts.map((shift) => shift.date)).toEqual(['2026-10-11', '2026-10-13']);
   });
 
   it('updates a shift with PATCH', async () => {

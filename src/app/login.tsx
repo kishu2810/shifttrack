@@ -4,9 +4,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { getErrorMessage } from '@/api';
 import { Button } from '@/components/Button';
+import { DemoCredentials } from '@/components/DemoCredentials';
 import { Input } from '@/components/Input';
 import { colors } from '@/constants/colors';
 import { useAuth } from '@/context/AuthContext';
+import type { LoginCredentials } from '@/types/auth';
 import { hasErrors, validateLogin, type FieldErrors } from '@/utils/validation';
 
 type LoginField = 'email' | 'password';
@@ -20,6 +22,13 @@ export default function LoginScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitting = useRef(false);
   const passwordInput = useRef<TextInput>(null);
+
+  const fillCredentials = (credentials: LoginCredentials) => {
+    setEmail(credentials.email);
+    setPassword(credentials.password);
+    setFieldErrors({});
+    setFormError(null);
+  };
 
   const handleSubmit = async () => {
     if (submitting.current) return;
@@ -91,6 +100,8 @@ export default function LoginScreen() {
 
             <Button title="Sign In" onPress={handleSubmit} loading={isSubmitting} style={styles.submit} />
           </View>
+
+          <DemoCredentials onUse={fillCredentials} disabled={isSubmitting} />
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

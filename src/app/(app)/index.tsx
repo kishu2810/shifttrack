@@ -18,11 +18,11 @@ import type { Shift } from '@/types/shift';
 import { isDateKeyInWeek, toDateKey } from '@/utils/date';
 import { calculateDuration, formatDuration } from '@/utils/duration';
 
-async function runWithAlert(action: () => Promise<void>) {
+async function runWithAlert(action: () => Promise<void>, title = 'Something went wrong') {
   try {
     await action();
   } catch (error) {
-    Alert.alert('Something went wrong', getErrorMessage(error));
+    Alert.alert(title, getErrorMessage(error));
   }
 }
 
@@ -86,7 +86,7 @@ export default function ShiftsScreen() {
         activeShift ? (
           <ActiveShiftCard shift={activeShift} onEnd={confirmEndShift} isEnding={isEnding} />
         ) : (
-          <StartShiftCard onStart={() => runWithAlert(startShift)} isStarting={isStarting} />
+          <StartShiftCard onStart={() => runWithAlert(startShift, 'Unable to start shift')} isStarting={isStarting} />
         )
       ) : null}
 

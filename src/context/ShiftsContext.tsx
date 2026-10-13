@@ -4,6 +4,7 @@ import { AppState } from 'react-native';
 import { api, ApiError, getErrorMessage } from '@/api';
 import type { CreateShiftInput, Shift, UpdateShiftInput } from '@/types/shift';
 import { addDays, getWeekStart, toDateKey } from '@/utils/date';
+import { getShiftConflict, type ShiftTimes } from '@/utils/shiftOverlap';
 
 type LoadStatus = 'loading' | 'ready' | 'error';
 
@@ -115,22 +116,33 @@ export function ShiftsProvider({ children }: { children: ReactNode }) {
 
   const activeShift = useMemo(() => shifts.find((shift) => shift.endTime === null) ?? null, [shifts]);
 
+  // Instant feedback against the loaded shifts; the API re-checks against all shifts.
+  const assertNoConflict = useCallback(
+    (candidate: ShiftTimes, excludeId?: string) => {
+      const conflict = getShiftConflict(candidate, shifts, { excludeId });
+      if (conflict) throw new ApiError(conflict, 409);
+    },
+    [shifts],
+  );
+
   const createShift = useCallback(
     async (input: CreateShiftInput) => {
+      assertNoConflict(input);
       const created = await api.createShift(input);
       setShifts((current) => upsert(current, created));
       backgroundRefresh();
       return created;
     },
-    [backgroundRefresh],
+    [assertNoConflict, backgroundRefresh],
   );
 
   const startShift = useCallback(async () => {
     if (startInFlight.current || activeShift) return;
+    const now = new Date();
+    assertNoConflict({ startTime: now.toISOString(), endTime: null });
     startInFlight.current = true;
     setIsStarting(true);
     try {
-      const now = new Date();
       const created = await api.createShift({
         date: toDateKey(now),
         startTime: now.toISOString(),
@@ -143,7 +155,7 @@ export function ShiftsProvider({ children }: { children: ReactNode }) {
       startInFlight.current = false;
       setIsStarting(false);
     }
-  }, [activeShift, backgroundRefresh]);
+  }, [activeShift, assertNoConflict, backgroundRefresh]);
 
   const endShift = useCallback(async () => {
     if (endInFlight.current || !activeShift) return;
@@ -163,12 +175,14 @@ export function ShiftsProvider({ children }: { children: ReactNode }) {
     async (id: string, changes: UpdateShiftInput) => {
       // Active shifts are only closed through endShift, so the timer workflow can't be bypassed.
       if (activeShift?.id === id) throw new ApiError('End the active shift before editing it.', 409);
+      const current = shifts.find((shift) => shift.id === id);
+      if (current) assertNoConflict({ ...current, ...changes }, id);
       const updated = await api.updateShift(id, changes);
       setShifts((current) => upsert(current, updated));
       backgroundRefresh();
       return updated;
     },
-    [activeShift, backgroundRefresh],
+    [activeShift, shifts, assertNoConflict, backgroundRefresh],
   );
 
   const deleteShift = useCallback(

@@ -22,6 +22,7 @@ An iOS-first React Native app for staff to log in, view the current week's shift
 - Add Shift form with native pickers, inline validation (end after start, break ≥ 0 and shorter than the shift), live total preview, loading state and double-submit protection
 - Edit Shift for completed shifts, using the same form and validation, pre-filled with the shift's values
 - Delete Shift for completed shifts, with a confirmation alert and per-card loading state
+- Overlap validation for Create, Edit and Start Shift (adjacent shifts such as 09:00–17:00 and 17:00–21:00 are allowed)
 - Start / End Shift with a live elapsed timer; only one active shift can exist (enforced in the UI, the state layer and the mock API)
 - Active shift and timer survive backgrounding, screen remounts and full app restarts
 - Loading skeleton, empty state, and error state with a working Retry
@@ -52,7 +53,8 @@ src/
 - **UI** — screens and small presentational components. They read state from contexts and never call storage or the mock directly.
 - **API layer** — `src/api/types.ts` defines the `ShiftTrackApi` interface (one method per endpoint). `src/api/index.ts` exports `api = mockApi`; replacing it with an HTTP client that implements the same interface requires no UI changes.
 - **Storage** — `authStorage` wraps SecureStore for the session; `shiftStorage` wraps AsyncStorage and acts as the mock backend's database.
-- **Business logic** — `AuthContext` handles login/restore/logout. `ShiftsContext` loads the selected week (stored as an offset from the current week, so week 0 rolls over automatically), derives the active shift, and owns create/start/end/update/delete with in-flight guards. Add and Edit share one `ShiftForm` component. Date and duration maths live in `utils/` and are reused everywhere.
+- **Business logic** — `AuthContext` handles login/restore/logout. `ShiftsContext` loads the selected week (stored as an offset from the current week, so week 0 rolls over automatically), derives the active shift, and owns create/start/end/update/delete with in-flight guards. Add and Edit share one `ShiftForm` component.
+- **Overlap rules** — `utils/shiftOverlap.ts` (`getShiftConflict`) is the single rule set for Create, Edit and Start. The mock API enforces it on `POST`/`PATCH` against all stored shifts; `ShiftsContext` runs the same check first against the loaded shifts for instant feedback. Ranges are half-open (`[start, end)`), so back-to-back shifts are allowed. An active shift covers the time it has run so far (`[start, now]`), and Start Shift is rejected if any shift covers the current moment or another shift is already active. Date and duration maths live in `utils/` and are reused everywhere.
 - **State** — React Context and hooks only; no Redux/Zustand/React Query.
 
 ## Running
@@ -86,7 +88,8 @@ Jest with the `jest-expo` preset (`npm test`). Tests cover business logic, not U
 - `src/utils/__tests__/duration-test.ts` — completed-shift duration (09:00 → 17:30 with a 30 min break = 8h), active elapsed time from `Date.now() - startTime`, clamping to zero
 - `src/utils/__tests__/validation-test.ts` — end before/equal to start, valid shift, negative/empty break, break longer than the shift, login validation
 - `src/utils/__tests__/date-test.ts` — Monday week start, local date-key parsing, week membership
-- `src/api/__tests__/mockApi-test.ts` — wrong credentials, single active shift, PATCH, DELETE (active shift cannot be deleted), simulated errors
+- `src/utils/__tests__/shiftOverlap-test.ts` — exact duplicate, partial overlap, containment both ways, adjacent shifts, editing a shift against itself, starting during another shift, starting with an active shift
+- `src/api/__tests__/mockApi-test.ts` — wrong credentials, single active shift, overlap on POST/PATCH/start, clock-out always allowed, PATCH, DELETE (active shift cannot be deleted), simulated errors
 
 ## Test Login
 
@@ -95,7 +98,7 @@ Email: staff@shifttrack.test
 Password: Password123
 ```
 
-These are assessment-provided mock credentials and exist only in the mock layer (`src/api/mockApi.ts`).
+These are assessment-provided mock credentials and exist only in the mock layer (`src/api/mockApi.ts`, `DEMO_CREDENTIALS`). The login screen shows them in a **Demo account** card: long-press either value to copy it, or tap **Use demo account** to fill both fields.
 
 ## Mock API
 
@@ -111,7 +114,7 @@ These are assessment-provided mock credentials and exist only in the mock layer 
 
 - Every request waits ~700 ms to simulate network latency.
 - Data persists in AsyncStorage, so it survives restarts like a real server would. Logout does not delete shifts.
-- The mock validates like a server would: 401 for wrong credentials, 400 for invalid times, 404 for unknown shifts, 409 when a second active shift is attempted or the active shift is deleted.
+- The mock validates like a server would: 401 for wrong credentials, 400 for invalid times, 404 for unknown shifts, 409 for overlapping shifts, a second active shift, or deleting the active shift.
 - Errors are thrown as `ApiError` with a user-facing message and status code.
 
 **Triggering an error state:** in development builds, a **Mock API (dev only)** panel appears at the bottom of the shifts screen:
@@ -146,7 +149,8 @@ Completed:
 - Loading skeleton, empty state, error state with working Retry, simulated API errors
 - Edit and delete completed shifts (active shifts can only be ended, not edited or deleted)
 - Previous / next week navigation; Add Shift defaults to and is limited to the selected week
-- Jest unit tests for duration, timer, validation, dates and mock API rules (26 tests)
+- Overlap validation shared by Create, Edit and Start Shift
+- Jest unit tests for duration, timer, validation, dates, overlap and mock API rules (43 tests)
 - Typecheck, lint and `expo-doctor` pass; iOS and Android bundles build
 
 Unfinished / limitations:
@@ -155,6 +159,7 @@ Unfinished / limitations:
 - Shifts that cross midnight cannot be entered via the form (end must be after start on the same date)
 - Started shifts begin with a 0-minute break; there is no break entry when ending a shift
 - The form only allows dates within the shown week (Add: selected week; Edit: the shift's week), so a shift can't be moved to another week
-- No overlap detection between shifts
+- Ending the active shift is never blocked, so if a later shift was scheduled while on the clock (e.g. active since 08:00, then 09:00–10:00 added at 08:30), clocking out after 09:00 leaves the two overlapping
+- The client-side overlap pre-check only sees the loaded week plus the active shift; the API check covers all shifts, but its error arrives after the simulated network delay
 - The mock token is not validated on shift requests and does not expire
 - Light mode only

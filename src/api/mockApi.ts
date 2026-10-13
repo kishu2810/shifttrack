@@ -1,14 +1,19 @@
 import { clearShifts, readShifts, writeShifts } from '@/storage/shiftStorage';
-import type { Session } from '@/types/auth';
+import type { LoginCredentials, Session } from '@/types/auth';
 import type { Shift } from '@/types/shift';
 import { isDateKeyInWeek } from '@/utils/date';
+import { getShiftConflict } from '@/utils/shiftOverlap';
 
 import { ApiError, type ShiftTrackApi } from './types';
 
 // Assessment-provided test account. This is mock data, not a real secret.
-const MOCK_ACCOUNT = {
+export const DEMO_CREDENTIALS: LoginCredentials = {
   email: 'staff@shifttrack.test',
   password: 'Password123',
+};
+
+const MOCK_ACCOUNT = {
+  ...DEMO_CREDENTIALS,
   session: { token: 'abc123', user: { id: 'u1', name: 'Alex' } } satisfies Session,
 };
 
@@ -43,6 +48,11 @@ const createId = () => `s_${Date.now().toString(36)}_${Math.random().toString(36
 
 const byStartTime = (a: Shift, b: Shift) => a.startTime.localeCompare(b.startTime);
 
+function assertNoConflict(shift: Shift, shifts: Shift[]): void {
+  const conflict = getShiftConflict(shift, shifts, { excludeId: shift.id });
+  if (conflict) throw new ApiError(conflict, 409);
+}
+
 function assertValidTimes(shift: Shift): void {
   if (Number.isNaN(Date.parse(shift.startTime))) throw new ApiError('Invalid start time.', 400);
   if (shift.endTime === null) return;
@@ -73,11 +83,9 @@ export const mockApi: ShiftTrackApi = {
     await simulateRequest();
     const shifts = await readShifts();
     if (input.breakMinutes < 0) throw new ApiError('Break minutes cannot be negative.', 400);
-    if (input.endTime === null && shifts.some((shift) => shift.endTime === null)) {
-      throw new ApiError('You already have an active shift.', 409);
-    }
     const shift: Shift = { id: createId(), ...input };
     assertValidTimes(shift);
+    assertNoConflict(shift, shifts);
     await writeShifts([...shifts, shift]);
     return shift;
   },
@@ -90,9 +98,9 @@ export const mockApi: ShiftTrackApi = {
 
     const updated: Shift = { ...existing, ...changes, id };
     assertValidTimes(updated);
-    if (updated.endTime === null && shifts.some((shift) => shift.endTime === null && shift.id !== id)) {
-      throw new ApiError('You already have an active shift.', 409);
-    }
+    // Ending the active shift (clocking out) is never blocked; every other change is checked.
+    const isClockingOut = existing.endTime === null && updated.endTime !== null;
+    if (!isClockingOut) assertNoConflict(updated, shifts);
     await writeShifts(shifts.map((shift) => (shift.id === id ? updated : shift)));
     return updated;
   },
